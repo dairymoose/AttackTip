@@ -1,0 +1,11 @@
+## Interface: 11200
+## Title: AttackTip
+## Author: https://github.com/dairymoose
+## Version: 4.2.0
+## Notes: AttackTip. Chat command: |cffa050ff/sa|r
+## Dependencies:
+## OptionalDeps:
+## SavedVariablesPerCharacter: AttackTip_GS
+## SavedVariables: 
+AttackTip.xml
+AttackTip.lua
