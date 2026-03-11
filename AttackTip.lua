@@ -34,15 +34,85 @@ local function applyBonusHealingValue(healValue, coeff, bonusHealing)
 	return healValue + applied, applied
 end
 
-local hasImpHt = true
-local giftOfNatureRank = 5
 local manaMatch="(%d+) Mana"
 local rageMatch="(%d+) Rage"
 local energyMatch="(%d+) Energy"
+local castTimeMatch="(.+) sec cast"
+local secCooldownMatch="(%d+) sec cooldown"
+local weaponDamageMatch="(%d+)%% weapon damage"
+local causingDamageMatch="causing (%d+) damage"
+local causesDamageRangeMatch="Causes (%d+) to (%d+) .* damage"
+local doingDamageMatch="doing (%d+) damage"
+local meleeDamageMatch="melee damage"
 local hotMatch="Heals .* for (%d+) over (%d+) .*"
 local healMatch="Heals .* for (%d+) to (%d+).*"
+local dotRangeMatch="for (%d+) to (%d+).* over (%d+)"
 local healAndHotMatch="Heals .* for (%d+) to (%d+).* and another (%d+) over (%d+)"
-local castTimeMatch="(.+) sec cast"
+
+local function getSpellName()
+	return _G["GameTooltipTextLeft1"]:GetText()
+end
+
+local function getPowerCost()
+	local powerCost = 0
+	manaCost = string.match(_G["GameTooltipTextLeft2"]:GetText(), manaMatch) or 0
+	rageCost = string.match(_G["GameTooltipTextLeft2"]:GetText(), rageMatch) or 0
+	energyCost = string.match(_G["GameTooltipTextLeft2"]:GetText(), energyMatch) or 0
+	powerCost = manaCost + rageCost + energyCost
+	return powerCost
+end
+
+local function getMeleeDamageStats()
+	local ud = GetUnitData("player")
+	local minDmg = ud["minDamage"]
+	local maxDmg = ud["maxDamage"]
+	local attackPower = ud["attackPower"] + ud["attackPowerMods"]
+	local attackSpeed = UnitAttackSpeed("player")
+	local avgDamage = (minDmg + maxDmg)/2
+	
+	return avgDamage, attackPower, attackSpeed
+end
+
+local function getCastTime()
+	local castTime = string.match(_G["GameTooltipTextLeft3"]:GetText(), castTimeMatch) or 0
+	if castTime ~= nil then
+		castTime = tonumber(castTime)
+	else
+		castTime = 0
+	end
+	if _G["GameTooltipTextLeft3"]:GetText()=="Instant" then
+		castTime = 1.5
+	end
+	
+	return castTime
+end
+
+local function getCooldown()
+	local cdText = _G["GameTooltipTextRight3"]:GetText()
+	local cooldownSec = 0
+	if _G["GameTooltipTextRight3"]:IsVisible() then
+		if cdText ~= nil then
+			cooldownSec = string.match(_G["GameTooltipTextRight3"]:GetText(), secCooldownMatch) or 0
+		end
+		if cooldownSec ~= nil then
+			cooldownSec = tonumber(cooldownSec)
+		else
+			cooldownSec = 0
+		end
+	end
+	return cooldownSec
+end
+
+local function getCooldownOrCastTime(cooldownSec, castTime)
+	if cooldownSec == 0 then
+		cooldownSec = castTime
+	end
+	
+	return cooldownSec
+end
+
+local hasImpHt = true
+local giftOfNatureRank = 5
 local outputFmt0 = "%.0f"
 local outputFmt2 = "%.2f"
 local regrowthHot=0
@@ -53,13 +123,10 @@ local lastSwiftmendFactor=1
 local swiftmendRegrowthFactor = 18/20
 local swiftmendRejuvFactor = 12/12
 local maxHotDuration = 15
+local nextMeleeRageCost = 16
 local function processTooltip()
 	local lineCount=GameTooltip:NumLines()
 	if lineCount == 4 then
-		local rageCost = 0
-		local manaCost = 0
-		local energyCost = 0
-		local powerCost = 0
 		local hotValue = 0
 		
 		local healValueLow = 0
@@ -78,19 +145,14 @@ local function processTooltip()
 		local hasDirect = false
 		local hasHot = false
 		
-		local spellName = _G["GameTooltipTextLeft1"]:GetText()
-		manaCost = string.match(_G["GameTooltipTextLeft2"]:GetText(), manaMatch) or 0
-		rageCost = string.match(_G["GameTooltipTextLeft2"]:GetText(), rageMatch) or 0
-		energyCost = string.match(_G["GameTooltipTextLeft2"]:GetText(), energyMatch) or 0
+		local spellName = getSpellName()
+		local powerCost = getPowerCost()
 		hotValue, hotDuration = string.match(_G["GameTooltipTextLeft4"]:GetText(), hotMatch)
-		castTime = string.match(_G["GameTooltipTextLeft3"]:GetText(), castTimeMatch) or 0
+		local cooldownSec = getCooldown()
+		castTime = getCastTime()
 		
 		if hotValue == nil then
 			hotValue = 0
-		end
-		
-		if castTime ~= nil then
-			castTime = tonumber(castTime)
 		end
 		
 		if spellName == "Healing Touch" then
@@ -118,6 +180,12 @@ local function processTooltip()
 			end
 		end
 		
+		local causesDamageValue = 0
+		local causesDamageMin, causesDamageMax = string.match(_G["GameTooltipTextLeft4"]:GetText(), causesDamageRangeMatch)
+		if causesDamageMin ~= nil and causesDamageMax ~= nil then
+			causesDamageValue = (causesDamageMin + causesDamageMax)/2
+		end
+		
 		if hotValue ~= nil then
 			hotValue = tonumber(hotValue)
 		else
@@ -135,10 +203,22 @@ local function processTooltip()
 		end
 		
 		totalHeal = hotValue + healValue
-		powerCost = manaCost + rageCost + energyCost
 		
 		if spellName == "Swiftmend" then
-			totalHeal = lastSwiftmendHot*lastSwiftmendFactor
+			healValue = lastSwiftmendHot*lastSwiftmendFactor
+			totalHeal = healValue
+		end
+		
+		if powerCost > 0 and causesDamageValue > 0 then
+			local calcDamage = causesDamageValue
+			local calcDpm = calcDamage/powerCost
+			cooldownSec = getCooldownOrCastTime(cooldownSec, castTime)
+			local calcDps = calcDamage/cooldownSec
+			GameTooltip:AddLine(" ")
+			GameTooltip:AddLine("|cffff0088".."DPM: "..string.format(outputFmt2, calcDpm))
+			GameTooltip:AddLine("|cffff0088".."DPS: "..string.format(outputFmt2, calcDps))
+			GameTooltip:AddLine("|cffff0088".."Damage: "..calcDamage)
+			GameTooltip:Show()
 		end
 		
 		if powerCost > 0 and totalHeal > 0 then
@@ -227,6 +307,70 @@ local function processTooltip()
 		--print("|cff00ff00------")
 		for i=1, GameTooltip:NumLines() do 
 			--print(_G["GameTooltipTextLeft"..i]:GetText())
+		end
+	elseif lineCount == 5 or lineCount == 6 then
+		local weaponDamagePct = 0
+		
+		weaponDamagePct = string.match(_G["GameTooltipTextLeft"..lineCount]:GetText(), weaponDamageMatch) or 0
+		if weaponDamagePct ~= nil then
+			weaponDamagePct = tonumber(weaponDamagePct)/100
+		end
+		if string.match(_G["GameTooltipTextLeft"..lineCount]:GetText(), meleeDamageMatch) then
+			weaponDamagePct = 1
+		end
+		
+		local spellName = getSpellName()
+		local powerCost = getPowerCost()
+		local avgDamage, attackPower, attackSpeed = getMeleeDamageStats()
+		
+		local dotDamage = 0
+		local dotMin, dotMax, dotDuration = string.match(_G["GameTooltipTextLeft"..lineCount]:GetText(), dotRangeMatch)
+		if dotMin ~= nil and dotMax ~= nil and dotDuration ~= nil then
+			dotDamage = (dotMin + dotMax)/2
+		end
+
+		local cooldownSec = getCooldown()
+		local castTime = getCastTime()
+
+		if powerCost > 0 and weaponDamagePct ~= 0 then
+			local calcDamage = weaponDamagePct*avgDamage
+			local calcDpr = calcDamage/powerCost
+			cooldownSec = getCooldownOrCastTime(cooldownSec, castTime)
+			local calcDps = calcDamage/cooldownSec
+			local calcDamageText = string.format(outputFmt0, calcDamage)
+			GameTooltip:AddLine(" ")
+			GameTooltip:AddLine("|cffee1111".."DPR: "..string.format(outputFmt2,calcDpr))
+			GameTooltip:AddLine("|cffee1111".."DPS: "..string.format(outputFmt2,calcDps))
+			GameTooltip:AddLine("|cffee1111".."Damage: "..calcDamageText)
+			GameTooltip:AddLine("|cffee1111".."Cooldown: "..cooldownSec)
+			GameTooltip:Show()
+		end
+		
+		causingDamageValue = string.match(_G["GameTooltipTextLeft"..lineCount]:GetText(), causingDamageMatch) or 0
+		if causingDamageValue == 0 then
+			causingDamageValue = string.match(_G["GameTooltipTextLeft"..lineCount]:GetText(), doingDamageMatch) or 0
+		end
+		if causingDamageValue ~= nil then
+			causingDamageValue = tonumber(causingDamageValue)
+		end
+		
+		if causingDamageValue == 0 and dotDamage > 0 then
+			causingDamageValue = dotDamage
+			castTime = dotDuration
+		end
+		
+		if powerCost > 0 and causingDamageValue > 0 then
+			local calcDamage = causingDamageValue
+			local calcDpr = calcDamage/powerCost
+			cooldownSec = getCooldownOrCastTime(cooldownSec, castTime)
+			local calcDps = calcDamage/cooldownSec
+			local calcDamageText = string.format(outputFmt0, calcDamage)
+			GameTooltip:AddLine(" ")
+			GameTooltip:AddLine("|cffee1111".."DPR: "..string.format(outputFmt2,calcDpr))
+			GameTooltip:AddLine("|cffee1111".."DPS: "..string.format(outputFmt2,calcDps))
+			GameTooltip:AddLine("|cffee1111".."Damage: "..calcDamage)
+			GameTooltip:AddLine("|cffee1111".."Cooldown: "..cooldownSec)
+			GameTooltip:Show()
 		end
 	end
 end
