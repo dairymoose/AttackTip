@@ -141,7 +141,8 @@ function AttackTip_OnUpdate(delta)
 end
 
 local function getLowLevelSpellCoefficient(spellLevel)
-	return (spellLevel * 3/20 + 1)/4
+	--return (spellLevel * 3/20 + 1)/4
+	return 1 - ((20-spellLevel)*3/80)
 end
 
 local belowLevel20Spells = {}
@@ -172,20 +173,23 @@ local function modifyCoeffForLowLevelSpell(spellName, spellRank, coeffHeal)
 	end
 end
 
-local hasImpHt = true
-local giftOfNatureRank = 5
-local outputFmt0 = "%.0f"
-local outputFmt2 = "%.2f"
-local regrowthHot=0
-local rejuvHot=0
-local lastSwiftmendHot=0
-local lastSwiftmendHotName=''
-local lastSwiftmendFactor=1
-local swiftmendRegrowthFactor = 18/20
-local swiftmendRejuvFactor = 12/12
-local maxHotDuration = 15
-local nextMeleeRageCost = 16
+
 local function processTooltip()
+	local hasImpHt = true
+	local giftOfNatureRank = 5
+	local outputFmt0 = "%.0f"
+	local outputFmt2 = "%.2f"
+	local outputFmt3 = "%.3f"
+	local regrowthHot=0
+	local rejuvHot=0
+	local lastSwiftmendHot=0
+	local lastSwiftmendHotName=''
+	local lastSwiftmendFactor=1
+	local swiftmendRegrowthFactor = 18/20
+	local swiftmendRejuvFactor = 12/12
+	local maxHotDuration = 15
+	local nextMeleeRageCost = 16
+
 	local lineCount=GameTooltip:NumLines()
 	if lineCount == 4 then
 		local hotValue = 0
@@ -361,10 +365,10 @@ local function processTooltip()
 				GameTooltip:AddLine("|cff00ff00".."+Heal: "..string.format(outputFmt0, bonusHealingApplied))
 			end
 			if coeffHeal > 0 then
-				GameTooltip:AddLine("|cff00ff00".."coeffHeal: "..string.format(outputFmt2, coeffHeal))
+				GameTooltip:AddLine("|cff00ff00".."coeffHeal: "..string.format(outputFmt3, coeffHeal))
 			end
 			if coeffHot > 0 then
-				GameTooltip:AddLine("|cff00ff00".."coeffHot: "..string.format(outputFmt2, coeffHot))
+				GameTooltip:AddLine("|cff00ff00".."coeffHot: "..string.format(outputFmt3, coeffHot))
 			end
 			--GameTooltip:AddLine("|cff00ff00".."Cast Time: "..castTime)
 			--GameTooltip:AddLine("|cff00ff00".."Duration: "..hotDuration)
