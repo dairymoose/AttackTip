@@ -146,6 +146,9 @@ local function getLowLevelSpellCoefficient(spellLevel)
 end
 
 local belowLevel20Spells = {}
+belowLevel20Spells["Holy Light(Rank 1)"]=1
+belowLevel20Spells["Holy Light(Rank 2)"]=6
+belowLevel20Spells["Holy Light(Rank 3)"]=14
 belowLevel20Spells["Healing Touch(Rank 1)"]=1
 belowLevel20Spells["Healing Touch(Rank 2)"]=8
 belowLevel20Spells["Healing Touch(Rank 3)"]=14
