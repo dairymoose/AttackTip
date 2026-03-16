@@ -34,6 +34,7 @@ local function applyBonusHealingValue(healValue, coeff, bonusHealing)
 	return healValue + applied, applied
 end
 
+local rankMatch="Rank (%d+)"
 local manaMatch="(%d+) Mana"
 local rageMatch="(%d+) Rage"
 local energyMatch="(%d+) Energy"
@@ -41,6 +42,7 @@ local castTimeMatch="(.+) sec cast"
 local secCooldownMatch="(%d+) sec cooldown"
 local weaponDamageMatch="(%d+)%% weapon damage"
 local causingDamageMatch="causing (%d+) damage"
+local causingRangeDamageMatch="causing (%d+) to (%d+) damage"
 local causesDamageRangeMatch="Causes (%d+) to (%d+) .* damage"
 local doingDamageMatch="doing (%d+) damage"
 local meleeDamageMatch="melee damage"
@@ -48,6 +50,17 @@ local hotMatch="Heals .* for (%d+) over (%d+) .*"
 local healMatch="Heals .* for (%d+) to (%d+).*"
 local dotRangeMatch="for (%d+) to (%d+).* over (%d+)"
 local healAndHotMatch="Heals .* for (%d+) to (%d+).* and another (%d+) over (%d+)"
+
+local function getSpellRank()
+	local spellRank = 0
+	if _G["GameTooltipTextRight1"]:IsVisible() then
+		local right1Text = _G["GameTooltipTextRight1"]:GetText()
+		if right1Text ~= nil then
+			spellRank = string.match(right1Text, rankMatch) or 0
+		end
+	end
+	return spellRank
+end
 
 local function getSpellName()
 	return _G["GameTooltipTextLeft1"]:GetText()
@@ -82,6 +95,8 @@ local function getCastTime()
 	end
 	if _G["GameTooltipTextLeft3"]:GetText()=="Instant" then
 		castTime = 1.5
+	elseif _G["GameTooltipTextLeft3"]:GetText()=="Next melee" then
+		castTime = math.floor(UnitAttackSpeed("player")*100)/100
 	end
 	
 	return castTime
@@ -109,6 +124,52 @@ local function getCooldownOrCastTime(cooldownSec, castTime)
 	end
 	
 	return cooldownSec
+end
+
+local elapsed = 0
+function AttackTip_OnUpdate(delta)
+	elapsed = elapsed + delta
+	if elapsed >= 1.0 then
+		if PlayerStatFrameRight4StatText ~= nil and PlayerStatFrameRight4StatText:GetText() ~= nil then
+			local newBonusHealing = tonumber(PlayerStatFrameRight4StatText:GetText())
+			if bonusHealing ~= newBonusHealing then
+				bonusHealing = newBonusHealing
+				print('AttackTip: Adjusted bonusHealing to '..bonusHealing)
+			end
+		end
+	end
+end
+
+local function getLowLevelSpellCoefficient(spellLevel)
+	return (spellLevel * 3/20 + 1)/4
+end
+
+local belowLevel20Spells = {}
+belowLevel20Spells["Healing Touch(Rank 1)"]=1
+belowLevel20Spells["Healing Touch(Rank 2)"]=8
+belowLevel20Spells["Healing Touch(Rank 3)"]=14
+belowLevel20Spells["Regrowth(Rank 1)"]=12
+belowLevel20Spells["Regrowth(Rank 2)"]=18
+belowLevel20Spells["Rejuvenation(Rank 1)"]=4
+belowLevel20Spells["Rejuvenation(Rank 2)"]=10
+belowLevel20Spells["Rejuvenation(Rank 3)"]=16
+belowLevel20Spells["Lesser Heal(Rank 1)"]=1
+belowLevel20Spells["Lesser Heal(Rank 2)"]=4
+belowLevel20Spells["Lesser Heal(Rank 3)"]=10
+belowLevel20Spells["Heal(Rank 1)"]=16
+belowLevel20Spells["Healing Wave(Rank 1)"]=1
+belowLevel20Spells["Healing Wave(Rank 2)"]=6
+belowLevel20Spells["Healing Wave(Rank 3)"]=12
+belowLevel20Spells["Healing Wave(Rank 4)"]=18
+
+local function modifyCoeffForLowLevelSpell(spellName, spellRank, coeffHeal)
+	local rankedSpell = spellName.."(Rank "..spellRank..")"
+	if belowLevel20Spells[rankedSpell] == nil then
+		return coeffHeal
+	else
+		local spellLevel = belowLevel20Spells[rankedSpell]
+		return coeffHeal*getLowLevelSpellCoefficient(spellLevel)
+	end
 end
 
 local hasImpHt = true
@@ -146,6 +207,7 @@ local function processTooltip()
 		local hasHot = false
 		
 		local spellName = getSpellName()
+		local spellRank = getSpellRank()
 		local powerCost = getPowerCost()
 		hotValue, hotDuration = string.match(_G["GameTooltipTextLeft4"]:GetText(), hotMatch)
 		local cooldownSec = getCooldown()
@@ -239,6 +301,8 @@ local function processTooltip()
 					if applyBonusHealing then
 						coeffHeal = 0.3
 						coeffHot = 0.7
+						coeffHeal = modifyCoeffForLowLevelSpell(spellName, spellRank, coeffHeal)
+						coeffHot = modifyCoeffForLowLevelSpell(spellName, spellRank, coeffHot)
 						healValue, healApplied = applyBonusHealingValue(healValue, coeffHeal, bonusHealing)
 						hotValue, hotApplied = applyBonusHealingValue(hotValue, coeffHot, bonusHealing)
 					end
@@ -246,10 +310,12 @@ local function processTooltip()
 					if applyBonusHealing then
 						if hasDirect then
 							coeffHeal = castTime/maxCastTimeCoefficient
+							coeffHeal = modifyCoeffForLowLevelSpell(spellName, spellRank, coeffHeal)
 							healValue, healApplied = applyBonusHealingValue(healValue, coeffHeal, bonusHealing)
 						end
 						if hasHot then
 							coeffHot = hotDuration/maxHotDuration
+							coeffHot = modifyCoeffForLowLevelSpell(spellName, spellRank, coeffHot)
 							hotValue, hotApplied = applyBonusHealingValue(hotValue, coeffHot, bonusHealing)
 						end
 					end
@@ -271,7 +337,9 @@ local function processTooltip()
 			end
 		
 			local hpm = totalHeal / powerCost
+			local hps = healValue / castTime
 			local hpmText = string.format(outputFmt2, hpm)
+			local hpsText = string.format(outputFmt2, hps)
 			
 			local totalHealText = string.format(outputFmt0, totalHeal)
 			local directHealText = string.format(outputFmt0, healValue)
@@ -279,6 +347,7 @@ local function processTooltip()
 			--print(powerCost.. " Power")
 			GameTooltip:AddLine(" ")
 			GameTooltip:AddLine("|cff00ff00".."HPM: "..hpmText)
+			GameTooltip:AddLine("|cff00ff00".."HPS: "..hpsText)
 			if healValue > 0 and hotValue > 0 then
 				GameTooltip:AddLine("|cff00ff00".."Healing: "..totalHealText)
 			end
@@ -297,7 +366,7 @@ local function processTooltip()
 			if coeffHot > 0 then
 				GameTooltip:AddLine("|cff00ff00".."coeffHot: "..string.format(outputFmt2, coeffHot))
 			end
-			GameTooltip:AddLine("|cff00ff00".."Cast Time: "..castTime)
+			--GameTooltip:AddLine("|cff00ff00".."Cast Time: "..castTime)
 			--GameTooltip:AddLine("|cff00ff00".."Duration: "..hotDuration)
 			if spellName == "Swiftmend" then
 				GameTooltip:AddLine("|cff00ff00".."Swiftmend HoT: "..lastSwiftmendHotName)
@@ -320,6 +389,7 @@ local function processTooltip()
 		end
 		
 		local spellName = getSpellName()
+		local spellRank = getSpellRank()
 		local powerCost = getPowerCost()
 		local avgDamage, attackPower, attackSpeed = getMeleeDamageStats()
 		
@@ -354,12 +424,22 @@ local function processTooltip()
 			causingDamageValue = tonumber(causingDamageValue)
 		end
 		
+		if causingDamageValue == nil or causingDamageValue == 0 then
+			causingMinDamage, causingMaxDamage = string.match(_G["GameTooltipTextLeft"..lineCount]:GetText(), causingRangeDamageMatch)
+			if causingMinDamage ~= nil and causingMaxDamage ~= nil then
+				causingDamageValue = (causingMinDamage + causingMaxDamage)/2
+			end
+			if causingDamageValue ~= nil then
+				causingDamageValue = tonumber(causingDamageValue)
+			end
+		end
+		
 		if causingDamageValue == 0 and dotDamage > 0 then
 			causingDamageValue = dotDamage
 			castTime = dotDuration
 		end
 		
-		if powerCost > 0 and causingDamageValue > 0 then
+		if powerCost > 0 and causingDamageValue > 0 then		
 			local calcDamage = causingDamageValue
 			local calcDpr = calcDamage/powerCost
 			cooldownSec = getCooldownOrCastTime(cooldownSec, castTime)
@@ -370,6 +450,22 @@ local function processTooltip()
 			GameTooltip:AddLine("|cffee1111".."DPS: "..string.format(outputFmt2,calcDps))
 			GameTooltip:AddLine("|cffee1111".."Damage: "..calcDamage)
 			GameTooltip:AddLine("|cffee1111".."Cooldown: "..cooldownSec)
+			if spellName == "Cleave" then
+				GameTooltip:AddLine("|cffee1111".."2x DPR: "..string.format(outputFmt2,2*calcDpr))
+				GameTooltip:AddLine("|cffee1111".."2x DPS: "..string.format(outputFmt2,2*calcDps))
+				GameTooltip:AddLine("|cffee1111".."2x Damage: "..2*calcDamage)
+			end
+			if spellName == "Execute" then
+				local executeRageCost = 15
+				local damage100Rage = calcDamage + 12*(100-executeRageCost)
+				local dpr100Rage = damage100Rage/powerCost
+				local damage130Rage = calcDamage + 12*(130-executeRageCost)
+				local dpr130Rage = damage100Rage/powerCost
+				GameTooltip:AddLine("|cffee1111".."100 Rage DPR: "..dpr100Rage)
+				GameTooltip:AddLine("|cffee1111".."100 Rage Damage: "..damage100Rage)
+				GameTooltip:AddLine("|cffee1111".."130 Rage DPR: "..dpr130Rage)
+				GameTooltip:AddLine("|cffee1111".."130 Rage Damage: "..damage130Rage)
+			end
 			GameTooltip:Show()
 		end
 	end

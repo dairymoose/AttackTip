@@ -9,6 +9,9 @@
 			<OnEvent>
 				AttackTip_OnEvent()
 			</OnEvent>
+			<OnUpdate>
+				AttackTip_OnUpdate(arg1)
+			</OnUpdate>
 			<OnDragStart>
 				self:StartMoving()
 			</OnDragStart>
