@@ -41,15 +41,19 @@ local energyMatch="(%d+) Energy"
 local castTimeMatch="(.+) sec cast"
 local secCooldownMatch="(%d+) sec cooldown"
 local weaponDamageMatch="(%d+)%% weapon damage"
+local executeMatch="causing (%d+) damage and converting each extra point of rage into (%d+) additional"
 local causingDamageMatch="causing (%d+) damage"
-local causingRangeDamageMatch="causing (%d+) to (%d+) damage"
+local causingRangeDamageMatch="causing (%d+) to (%d+) .* damage"
 local causesDamageRangeMatch="Causes (%d+) to (%d+) .* damage"
+local causesLowercaseDamageRangeMatch="causes (%d+) to (%d+) .* damage"
 local doingDamageMatch="doing (%d+) damage"
 local meleeDamageMatch="melee damage"
 local hotMatch="Heals .* for (%d+) over (%d+) .*"
 local healMatch="Heals .* for (%d+) to (%d+).*"
 local dotRangeMatch="for (%d+) to (%d+).* over (%d+)"
+local dotExactMatch="for (%d+) damage over (%d+)"
 local healAndHotMatch="Heals .* for (%d+) to (%d+).* and another (%d+) over (%d+)"
+local bloodthirstMatch="dealing (%d+) damage plus (%d+)%% of your Attack Power"
 
 local function getSpellRank()
 	local spellRank = 0
@@ -119,7 +123,7 @@ local function getCooldown()
 end
 
 local function getCooldownOrCastTime(cooldownSec, castTime)
-	if cooldownSec == 0 then
+	if cooldownSec == nil or cooldownSec == 0 then
 		cooldownSec = castTime
 	end
 	
@@ -134,7 +138,9 @@ function AttackTip_OnUpdate(delta)
 			local newBonusHealing = tonumber(PlayerStatFrameRight4StatText:GetText())
 			if bonusHealing ~= newBonusHealing then
 				bonusHealing = newBonusHealing
-				print('AttackTip: Adjusted bonusHealing to '..bonusHealing)
+				if bonusHealing ~= nil then
+					print('AttackTip: Adjusted bonusHealing to '..bonusHealing)
+				end
 			end
 		end
 	end
@@ -176,6 +182,25 @@ local function modifyCoeffForLowLevelSpell(spellName, spellRank, coeffHeal)
 	end
 end
 
+local precisionCutRank = 0
+local function getTalentRankByName(talentName)
+	local tTalentRank = 0
+	local tMaxRank = 0
+	
+	for t=1,3 do
+		for idx=1,(4*7) do
+			local name, iconPath, tier, column, currentRank, maxRank, isExceptional, meetsPrereq=GetTalentInfo(t, idx)
+			if name ~= nil then
+				if name == talentName then
+					tTalentRank = currentRank
+					tMaxRank = maxRank
+				end
+			end
+		end
+	end
+	
+	return tTalentRank, tMaxRank
+end
 
 local function processTooltip()
 	local hasImpHt = true
@@ -253,6 +278,11 @@ local function processTooltip()
 		local causesDamageMin, causesDamageMax = string.match(_G["GameTooltipTextLeft4"]:GetText(), causesDamageRangeMatch)
 		if causesDamageMin ~= nil and causesDamageMax ~= nil then
 			causesDamageValue = (causesDamageMin + causesDamageMax)/2
+		else
+			local causesDamageMin, causesDamageMax = string.match(_G["GameTooltipTextLeft4"]:GetText(), causesLowercaseDamageRangeMatch)
+			if causesDamageMin ~= nil and causesDamageMax ~= nil then
+				causesDamageValue = (causesDamageMin + causesDamageMax)/2
+			end
 		end
 		
 		if hotValue ~= nil then
@@ -384,7 +414,8 @@ local function processTooltip()
 		for i=1, GameTooltip:NumLines() do 
 			--print(_G["GameTooltipTextLeft"..i]:GetText())
 		end
-	elseif lineCount == 5 or lineCount == 6 then
+	end
+	if lineCount == 4 or lineCount == 5 or lineCount == 6 then
 		local weaponDamagePct = 0
 		
 		weaponDamagePct = string.match(_G["GameTooltipTextLeft"..lineCount]:GetText(), weaponDamageMatch) or 0
@@ -404,10 +435,21 @@ local function processTooltip()
 		local dotMin, dotMax, dotDuration = string.match(_G["GameTooltipTextLeft"..lineCount]:GetText(), dotRangeMatch)
 		if dotMin ~= nil and dotMax ~= nil and dotDuration ~= nil then
 			dotDamage = (dotMin + dotMax)/2
+		else
+			local dotExact, dotDuration = string.match(_G["GameTooltipTextLeft"..lineCount]:GetText(), dotExactMatch)
+			if dotExact ~= nil and dotDuration ~= nil then
+				print('dd2:'..dotDuration)
+				dotDamage = tonumber(dotExact)
+			end
 		end
 
 		local cooldownSec = getCooldown()
 		local castTime = getCastTime()
+
+		if causingDamageValue == 0 and dotDamage > 0 then
+			causingDamageValue = dotDamage
+			castTime = dotDuration
+		end
 
 		if powerCost > 0 and weaponDamagePct ~= 0 then
 			local calcDamage = weaponDamagePct*avgDamage
@@ -441,6 +483,11 @@ local function processTooltip()
 			end
 		end
 		
+		local btDamage, btApPercent = string.match(_G["GameTooltipTextLeft"..lineCount]:GetText(), bloodthirstMatch)
+		if btDamage ~= nil and btApPercent ~= nil then
+			causingDamageValue = tonumber(btApPercent)/100.0*attackPower + btDamage
+		end
+		
 		if causingDamageValue == 0 and dotDamage > 0 then
 			causingDamageValue = dotDamage
 			castTime = dotDuration
@@ -463,14 +510,19 @@ local function processTooltip()
 				GameTooltip:AddLine("|cffee1111".."2x Damage: "..2*calcDamage)
 			end
 			if spellName == "Execute" then
+				local executeBase, executeBonus = string.match(_G["GameTooltipTextLeft"..lineCount]:GetText(), executeMatch)
+				local precisionCutRank = getTalentRankByName("Precision Cut")
+				local talentBoost = 1.0 + precisionCutRank*0.25
 				local executeRageCost = 15
-				local damage100Rage = calcDamage + 12*(100-executeRageCost)
-				local dpr100Rage = damage100Rage/powerCost
-				local damage130Rage = calcDamage + 12*(130-executeRageCost)
-				local dpr130Rage = damage100Rage/powerCost
-				GameTooltip:AddLine("|cffee1111".."100 Rage DPR: "..dpr100Rage)
+				local damage100Rage = calcDamage + talentBoost*executeBonus*(100-executeRageCost)
+				local dpr100Rage = damage100Rage/100
+				local damage130Rage = calcDamage + talentBoost*executeBonus*(130-executeRageCost)
+				local dpr130Rage = damage130Rage/130
+				local dpr100RageText = string.format(outputFmt2, dpr100Rage)
+				local dpr130RageText = string.format(outputFmt2, dpr130Rage)
+				GameTooltip:AddLine("|cffee1111".."100 Rage DPR: "..dpr100RageText)
 				GameTooltip:AddLine("|cffee1111".."100 Rage Damage: "..damage100Rage)
-				GameTooltip:AddLine("|cffee1111".."130 Rage DPR: "..dpr130Rage)
+				GameTooltip:AddLine("|cffee1111".."130 Rage DPR: "..dpr130RageText)
 				GameTooltip:AddLine("|cffee1111".."130 Rage Damage: "..damage130Rage)
 			end
 			GameTooltip:Show()
