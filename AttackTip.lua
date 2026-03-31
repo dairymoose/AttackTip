@@ -54,6 +54,7 @@ local dotRangeMatch="for (%d+) to (%d+).* over (%d+)"
 local dotExactMatch="for (%d+) damage over (%d+)"
 local healAndHotMatch="Heals .* for (%d+) to (%d+).* and another (%d+) over (%d+)"
 local bloodthirstMatch="dealing (%d+) damage plus (%d+)%% of your Attack Power"
+local enemyForMatch="the enemy for (%d+) to (%d+) .* damage"
 
 local function getSpellRank()
 	local spellRank = 0
@@ -257,9 +258,6 @@ local function processTooltip()
 		if castTime == nil or castTime <= 1.5 then
 			--castTime = 1.5
 		end
-		if castTime > maxCastTimeCoefficient then
-			castTime = maxCastTimeCoefficient
-		end
 		
 		local healAndHotDuration = 0
 		healAndHotDirectLow, healAndHotDirectHigh, healAndHotOverTime, healAndHotDuration = string.match(_G["GameTooltipTextLeft4"]:GetText(), healAndHotMatch)
@@ -346,7 +344,11 @@ local function processTooltip()
 				else
 					if applyBonusHealing then
 						if hasDirect then
-							coeffHeal = castTime/maxCastTimeCoefficient
+							local castTimeForCoeff = castTime
+							if castTimeForCoeff > maxCastTimeCoefficient then
+								castTimeForCoeff = maxCastTimeCoefficient
+							end
+							coeffHeal = castTime/castTimeForCoeff
 							coeffHeal = modifyCoeffForLowLevelSpell(spellName, spellRank, coeffHeal)
 							healValue, healApplied = applyBonusHealingValue(healValue, coeffHeal, bonusHealing)
 						end
@@ -462,6 +464,10 @@ local function processTooltip()
 			GameTooltip:AddLine("|cffee1111".."DPS: "..string.format(outputFmt2,calcDps))
 			GameTooltip:AddLine("|cffee1111".."Damage: "..calcDamageText)
 			GameTooltip:AddLine("|cffee1111".."Cooldown: "..cooldownSec)
+			if spellName == "Slam" then
+				local everySwingDps = calcDamage/attackSpeed
+				GameTooltip:AddLine("|cffee1111".."Every Swing DPS: "..string.format(outputFmt2,everySwingDps))
+			end
 			GameTooltip:Show()
 		end
 		
@@ -486,6 +492,16 @@ local function processTooltip()
 		local btDamage, btApPercent = string.match(_G["GameTooltipTextLeft"..lineCount]:GetText(), bloodthirstMatch)
 		if btDamage ~= nil and btApPercent ~= nil then
 			causingDamageValue = tonumber(btApPercent)/100.0*attackPower + btDamage
+		end
+		
+		if causingDamageValue == nil or causingDamageValue == 0 then
+			causingMinDamage, causingMaxDamage = string.match(_G["GameTooltipTextLeft"..lineCount]:GetText(), enemyForMatch)
+			if causingMinDamage ~= nil and causingMaxDamage ~= nil then
+				causingDamageValue = (causingMinDamage + causingMaxDamage)/2
+			end
+			if causingDamageValue ~= nil then
+				causingDamageValue = tonumber(causingDamageValue)
+			end
 		end
 		
 		if causingDamageValue == 0 and dotDamage > 0 then
